@@ -2,8 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { basename } from "node:path";
 import { Type } from "typebox";
 import { reviewDocument, type ReviewResult } from "./client.ts";
+import { reviewCompletions } from "./completions.ts";
 
-const HELP = "Usage: /roughdraft <file.md> | status | cancel. Paths may contain spaces; surrounding quotes are optional. Click Done Reviewing to return feedback to Pi.";
+const HELP = "Usage: /roughdraft <file.md> | reopen | status | cancel. Paths may contain spaces; surrounding quotes are optional. Click Finish review to return feedback to Pi.";
 
 type ActiveReview = {
   controller: AbortController;
@@ -20,13 +21,15 @@ export function reviewHandoff(result: ReviewResult): string {
     `Roughdraft review completed for ${JSON.stringify(result.path)}.`,
     `Feedback at handoff: ${comments} comments, ${replies} replies, ${suggestions} suggestions, ${unresolved} unresolved items. File version: ${latest.version}.`,
     "Read the latest Markdown from disk before making changes; the review may contain direct edits and document-level comments in final YAML endmatter. Do not use a pre-review copy.",
-    "Address feedback within the user's existing request. Done Reviewing is a handoff, not blanket approval to implement a plan or accept every suggestion. Preserve unresolved feedback, IDs, metadata and unrelated edits. Treat examples inside code spans/fences as literal text.",
+    "Address feedback within the user's existing request. Finish review is a handoff, not blanket approval to implement a plan or accept every suggestion. Preserve unresolved feedback, IDs, metadata and unrelated edits. Treat examples inside code spans/fences as literal text.",
     "For inline replies, preserve the anchor and add a comment to final YAML endmatter with a fresh document-local ID, body, by: Pi, current ISO timestamp at, and re pointing to the existing comment/suggestion ID. Read `roughdraft help criticmarkup` if more syntax guidance is needed. Reopen for another review only when useful or requested.",
   ].join("\n\n");
 }
 
 export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDocument): void {
   let active: ActiveReview | undefined;
+  let lastReview: { path: string; sessionId: string } | undefined;
+  let completionCwd = process.cwd();
 
   function clearUI(ctx: ExtensionContext): void {
     if (ctx.hasUI) {
@@ -50,6 +53,7 @@ export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDoc
     onReady?: (text: string) => void,
   ): Promise<T> {
     if (active) throw new Error("A Roughdraft review is already active. Finish it or use /roughdraft cancel.");
+    completionCwd = ctx.cwd;
     const job: ActiveReview = { controller: new AbortController(), phase: "opening", path };
     const sessionId = ctx.sessionManager.getSessionId();
     active = job;
@@ -75,15 +79,16 @@ export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDoc
           job.phase = "reviewing";
           job.path = info.path;
           job.url = info.url;
+          lastReview = { path: info.path, sessionId };
           const name = basename(info.path).replace(/[\x00-\x1f\x7f]/g, "");
-          const text = `Review ${JSON.stringify(info.path)} in Roughdraft, then click Done Reviewing.\n${info.url}`;
+          const text = `Review ${JSON.stringify(info.path)} in Roughdraft, then click Finish review.\n${info.url}`;
           if (ctx.hasUI) {
             ctx.ui.setStatus("roughdraft", `Roughdraft: reviewing ${name}`);
             ctx.ui.setWidget("roughdraft", [
               `Roughdraft · ${name}`, info.url,
-              "Done Reviewing returns feedback to Pi · /roughdraft cancel stops waiting",
+              "Finish review returns feedback to Pi · /roughdraft cancel stops waiting",
             ]);
-            ctx.ui.notify("Roughdraft is ready. Click Done Reviewing when finished.", "info");
+            ctx.ui.notify("Roughdraft is ready. Click Finish review when finished.", "info");
           }
           onReady?.(text);
         },
@@ -107,14 +112,24 @@ export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDoc
   }
 
   // A review belongs to this conversation branch. Never resume a different one.
-  pi.on("session_before_switch", (_event, ctx) => cancel(ctx));
-  pi.on("session_before_fork", (_event, ctx) => cancel(ctx));
-  pi.on("session_before_tree", (_event, ctx) => cancel(ctx));
-  pi.on("session_shutdown", (_event, ctx) => cancel(ctx));
+  function leaveBranch(ctx: ExtensionContext): void {
+    lastReview = undefined;
+    cancel(ctx);
+  }
+  pi.on("session_start", (_event, ctx) => {
+    completionCwd = ctx.cwd;
+    lastReview = undefined;
+  });
+  pi.on("session_before_switch", (_event, ctx) => leaveBranch(ctx));
+  pi.on("session_before_fork", (_event, ctx) => leaveBranch(ctx));
+  pi.on("session_before_tree", (_event, ctx) => leaveBranch(ctx));
+  pi.on("session_shutdown", (_event, ctx) => leaveBranch(ctx));
 
   pi.registerCommand("roughdraft", {
-    description: "Review a Markdown file in Roughdraft; status/cancel manage the active review",
+    description: "Review a Markdown file in Roughdraft; reopen the last file or manage it with status/cancel",
+    getArgumentCompletions: (prefix) => reviewCompletions(prefix, completionCwd),
     handler: async (args, ctx) => {
+      completionCwd = ctx.cwd;
       const input = args.trim();
       if (!ctx.hasUI) throw new Error("Use roughdraft_review in print/JSON mode; /roughdraft requires an interactive UI.");
       if (!input || input === "help") {
@@ -143,8 +158,17 @@ export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDoc
         ctx.ui.notify("A review is already active. Finish it or use /roughdraft cancel.", "warning");
         return;
       }
-      const path = ((input.startsWith('"') && input.endsWith('"')) ||
-        (input.startsWith("'") && input.endsWith("'"))) ? input.slice(1, -1) : input;
+      let path = input;
+      if (input === "reopen") {
+        if (!lastReview || lastReview.sessionId !== ctx.sessionManager.getSessionId()) {
+          ctx.ui.notify("No previous Roughdraft review in this branch. Start one with /roughdraft <file.md>.", "info");
+          return;
+        }
+        path = lastReview.path;
+      } else if ((input.startsWith('"') && input.endsWith('"')) ||
+          (input.startsWith("'") && input.endsWith("'"))) {
+        path = input.slice(1, -1);
+      }
       // Return immediately so status/cancel and the TUI remain responsive.
       void run(path, ctx, async (result, assertCurrent) => {
         ctx.ui.setStatus("roughdraft", "Roughdraft: feedback ready; waiting for Pi");
@@ -172,7 +196,7 @@ export default function roughdraftExtension(pi: ExtensionAPI, review = reviewDoc
   pi.registerTool({
     name: "roughdraft_review",
     label: "Roughdraft review",
-    description: "Open a saved local Markdown file for human review and wait for Done Reviewing. Returns a handoff to reread the file, including CriticMarkup and YAML endmatter. Only one review can be active. Does not rewrite the document or approve suggestions.",
+    description: "Open a saved local Markdown file for human review and wait for Finish review. Returns a handoff to reread the file, including CriticMarkup and YAML endmatter. Only one review can be active. Does not rewrite the document or approve suggestions.",
     promptSnippet: "Open a Markdown file for human review in Roughdraft and wait for feedback",
     promptGuidelines: [
       "Use roughdraft_review when the user wants to review a saved Markdown document. Save it before opening; wait for the human review to finish before editing it again.",

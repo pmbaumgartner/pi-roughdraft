@@ -128,8 +128,20 @@ export async function reviewDocument(options: ReviewOptions): Promise<ReviewResu
   }
   options.signal.throwIfAborted();
   const documentPath = path.resolve(options.cwd, options.path);
-  if (path.extname(documentPath).toLowerCase() !== ".md" || !(await stat(documentPath)).isFile()) {
-    throw new Error("Roughdraft needs an existing .md file.");
+  if (path.extname(documentPath).toLowerCase() !== ".md") {
+    throw new Error(`Roughdraft needs a saved .md file: ${JSON.stringify(documentPath)}.`);
+  }
+  let documentStat;
+  try {
+    documentStat = await stat(documentPath);
+  } catch (error) {
+    if (record(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      throw new Error(`Roughdraft could not find ${JSON.stringify(documentPath)}. Save the Markdown file first, then try again.`, { cause: error });
+    }
+    throw error;
+  }
+  if (!documentStat.isFile()) {
+    throw new Error(`Roughdraft needs a saved .md file: ${JSON.stringify(documentPath)} is not a file.`);
   }
 
   const lifetime = new AbortController();
@@ -140,18 +152,19 @@ export async function reviewDocument(options: ReviewOptions): Promise<ReviewResu
   timer?.unref();
 
   async function open(noOpen: boolean): Promise<Record<string, unknown>> {
+    const binary = env.ROUGHDRAFT_BIN?.trim() || "roughdraft";
     const args = ["open", documentPath, "--no-watch", "--json"];
     if (noOpen) args.push("--no-open");
     let stdout: string;
     try {
-      ({ stdout } = await execFileAsync(env.ROUGHDRAFT_BIN?.trim() || "roughdraft", args, {
+      ({ stdout } = await execFileAsync(binary, args, {
         cwd: options.cwd, env, signal, timeout: 20_000, maxBuffer: 1024 * 1024,
         windowsHide: true,
       }));
     } catch (error) {
       signal.throwIfAborted();
       if (record(error) && error.code === "ENOENT") {
-        throw new Error("Roughdraft CLI was not found. Install roughdraft, or set ROUGHDRAFT_BIN to its executable path.");
+        throw new Error(`Roughdraft CLI was not found at ${JSON.stringify(binary)}. Install the tested fork using https://github.com/pmbaumgartner/roughdraft#quick-start, then retry, or set ROUGHDRAFT_BIN to its executable path.`, { cause: error });
       }
       throw error;
     }

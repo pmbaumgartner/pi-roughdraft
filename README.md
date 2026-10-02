@@ -1,6 +1,6 @@
 # pi-roughdraft v1
 
-A local document-review handoff for Pi. Run `/roughdraft draft.md`, review in Roughdraft, and click **Done Reviewing** to bring the feedback back to the same Pi conversation.
+A local document-review handoff for Pi. Run `/roughdraft draft.md`, review in Roughdraft, and click **Finish review** to bring the feedback back to the same Pi conversation.
 
 ## Recommendation
 
@@ -10,20 +10,20 @@ This small extension is worthwhile for repeated use: it makes the workflow disco
 
 Pi 1.0 includes native MCP support. However, Roughdraft 0.1.10's experimental MCP is **not directly interoperable** with that client: Roughdraft expects `Content-Length` framing while Pi sends newline-delimited JSON. A real connection attempt with Pi's MCP client timed out. Merely adding `roughdraft mcp` to Pi's configuration does not fix this release. This extension bypasses that transport; it is not a general MCP bridge.
 
-Findings and version checks: October 2, 2026. Tested against `@earendil-works/pi-coding-agent@1.0.0`, `roughdraft@0.1.11-pmbaumgartner.1` (our packaging-only fork of 0.1.10), and Node 24.19 on Linux. Requires Node 22.19 or newer. Older `@mariozechner` Pi releases and Windows are not certified by this v1.
+Findings and version checks: October 2, 2026. Tested against `@earendil-works/pi-coding-agent@1.0.0`, `roughdraft@0.1.11-pmbaumgartner.2` (our workflow fork of 0.1.10), and Node 24.19 on Linux. Requires Node 22.19 or newer. Older `@mariozechner` Pi releases and Windows are not certified by this v1.
 
 ## Install
 
 Install the tested Roughdraft fork:
 
 ```bash
-npm install -g https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.1/roughdraft-0.1.11-pmbaumgartner.1.tgz
+npm install -g https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.2/roughdraft-0.1.11-pmbaumgartner.2.tgz
 roughdraft --version
 ```
 
-This [temporary fork](https://github.com/pmbaumgartner/roughdraft) declares `yaml` as a runtime dependency, fixing the clean-install crash in upstream 0.1.10. The release includes the built app and server; no separate `yaml` installation or source build is needed. The application and review protocol are unchanged. `roughdraft --version` should print `0.1.11-pmbaumgartner.1`. If Roughdraft was already running, finish any active review and run `roughdraft stop` once so the next review starts the installed version.
+This [fork](https://github.com/pmbaumgartner/roughdraft) declares `yaml` as a runtime dependency, fixing the clean-install crash in upstream 0.1.10. The release includes the built app and server; no separate `yaml` installation or source build is needed. It also includes review workflow fixes for reply visibility, code-block preservation, and watch cancellation. `roughdraft --version` should print `0.1.11-pmbaumgartner.2`. If Roughdraft was already running, finish any active review and run `roughdraft stop` once so the next review starts the installed version.
 
-The fork is a temporary packaging fix. To return to upstream after it publishes a verified fix, run `npm install -g roughdraft@<fixed-version>`; the extension will continue using the `roughdraft` executable on your `PATH`.
+To return to upstream after it includes and verifies the fixes you need, run `npm install -g roughdraft@<fixed-version>`; the extension will continue using the `roughdraft` executable on your `PATH`.
 
 Then register the extension with your existing Pi 1.0 installation:
 
@@ -42,11 +42,14 @@ For a downloaded source archive or local checkout, use `pi install /absolute/pat
 ```text
 /roughdraft ./docs/plan.md
 /roughdraft "./docs/plan with spaces.md"
+/roughdraft reopen
 /roughdraft status
 /roughdraft cancel
 ```
 
-The full argument is a file path, so unquoted spaces also work. Relative paths use Pi's session directory. Use a prefix such as `./` if a path could be confused with a subcommand. Save an existing `.md` file first. A bare `/roughdraft` shows help.
+The full argument is a file path, so unquoted spaces also work. Relative paths use Pi's session directory. Use a prefix such as `./` if a path could be confused with a subcommand. Save an existing `.md` file first. A bare `/roughdraft` shows help. Tab completion offers subcommands, directories, and Markdown files, including paths with spaces; use unquoted paths or double quotes for completion.
+
+`/roughdraft reopen` starts a fresh review of the last successfully opened file in the current conversation branch. It also works after `/roughdraft cancel`; it waits for a new handoff and does not resume canceled feedback. Reopen history is kept in memory and cleared on reload, session switching, forking, or tree navigation, including canceled navigation attempts. If there is no previous file, the command explains how to start a review.
 
 The command requires an idle interactive Pi session. The TUI stays usable during review. Leave the reviewed file alone until the handoff; this extension does not lock files or block other programs from editing them.
 
@@ -62,7 +65,7 @@ The agent also gets a sequential `roughdraft_review` tool:
 
 `openBrowser` defaults to true. Omit `timeoutSeconds` to wait indefinitely for the human; there is no model turn polling. Setting `openBrowser` to false returns the local URL in the tool's progress output. The tool supports Pi's cancellation signal and works without a TUI. The command keeps completed feedback under its control until Pi is idle, checks that the review still belongs to this session, then starts the follow-up with a custom extension message. The tool returns feedback in its existing turn.
 
-After Done Reviewing, Pi is instructed to reread the current Markdown, address feedback within the original request, and preserve review metadata and unrelated edits. Suggestions remain review input; finishing review does not mean the user approved implementing the entire plan. The extension itself never edits, accepts, resolves, or deletes feedback.
+After Finish review, Pi is instructed to reread the current Markdown, address feedback within the original request, and preserve review metadata and unrelated edits. Suggestions remain review input; finishing review does not mean the user approved implementing the entire plan. The extension itself never edits, accepts, resolves, or deletes feedback.
 
 Only one review is active per extension instance, including feedback waiting for Pi to become idle. Cancellation, reload, session switching, forking, and tree navigation stop the local handoff. Pending reviews do not survive restarting Pi; open the file again. Cancel leaves the browser and shared Roughdraft server open; finish saving any pending edits in Roughdraft. A canceled navigation attempt also ends the review conservatively.
 
@@ -77,7 +80,7 @@ Pi, Roughdraft, and the file must run on the same computer for the default brows
 
 The adapter bootstraps through the CLI, establishes a review cursor, then waits on Roughdraft's local HTTP review-event API with 15-second long polls. The cursor catches handoffs between requests and excludes previous reviews. Polls run locally without LLM calls. A server restart fails the review rather than silently reconnecting to a fresh event history.
 
-The HTTP endpoints are an upstream implementation contract, not a promised stable external API. Changes to Roughdraft may require updating `src/client.ts`; use the tested version for predictable behavior. The server currently does not remove a watcher on client disconnect, so its UI can still show an active watcher for up to 15 seconds after cancellation. The extension will not resume a canceled review. Roughdraft retains only 100 events, so it cannot recover arbitrarily long gaps or server restarts.
+The HTTP endpoints are an upstream implementation contract, not a promised stable external API. Changes to Roughdraft may require updating `src/client.ts`; use the tested version for predictable behavior. The tested fork removes a watcher when its client disconnects. The extension will not resume a canceled review. Roughdraft retains only 100 events, so it cannot recover arbitrarily long gaps or server restarts.
 
 ## Develop and verify
 
@@ -89,9 +92,9 @@ npm test
 
 Tests use an isolated state directory and a real Roughdraft local server, stop that server afterward, and do not launch a browser. They need permission to spawn local processes and bind loopback ports. The development dependency uses the same pinned fork release as the installation instructions; `yaml` is supplied by Roughdraft itself.
 
-The integration tests exercise fresh handoffs, exclusion of old events, persisted overall comments, unusual filenames, byte preservation when no edits occur, cancellation without stopping the shared server, review deadlines, and rejection of remote mode. Protocol-boundary tests cover malformed feedback, wrong documents, restarted servers, and watcher failure during a blocked browser launch. Pi registration tests exercise command/tool behavior, delivery after Pi becomes idle, and lifecycle races. No provider credentials or model calls are required.
+The integration tests exercise fresh handoffs, exclusion of old events, persisted overall comments, unusual filenames, byte preservation when no edits occur, cancellation without stopping the shared server, review deadlines, and rejection of remote mode. Protocol-boundary tests cover malformed feedback, wrong documents, restarted servers, and watcher failure during a blocked browser launch. Pi registration tests exercise command/tool behavior, explicit reopening, file completion, delivery after Pi becomes idle, and lifecycle races. Input tests check actionable missing-file and fork-setup errors. No provider credentials or model calls are required.
 
-Validation also included a real Pi package install/load and a direct native MCP connection attempt. Desktop browser launching and a paid model completing the reply loop were not exercised in this environment. On your machine, open a short document, add a comment, click Done Reviewing, and verify Pi reads the updated file. This is the remaining desktop acceptance check.
+Validation also included a real Pi package install/load and a direct native MCP connection attempt. Desktop browser launching and a paid model completing the reply loop were not exercised in this environment. On your machine, open a short document, add a comment, click Finish review, and verify Pi reads the updated file. This is the remaining desktop acceptance check.
 
 ## Sources and design dependencies
 

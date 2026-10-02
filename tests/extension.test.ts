@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import type {
@@ -31,7 +33,7 @@ function completed(path = "/project/draft.md"): ReviewResult {
   };
 }
 
-function harness(hasUI = true) {
+function harness(hasUI = true, cwd = "/project") {
   const commands = new Map<string, Command>();
   const tools = new Map<string, ToolDefinition>();
   const events = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -48,7 +50,7 @@ function harness(hasUI = true) {
   let idle = true;
   const idleWaiters = new Set<() => void>();
   const ctx = {
-    cwd: "/project",
+    cwd,
     hasUI,
     isIdle: () => idle,
     waitForIdle: () => idle ? Promise.resolve() : new Promise<void>((resolve) => { idleWaiters.add(resolve); }),
@@ -78,6 +80,7 @@ function harness(hasUI = true) {
   return {
     calls, messages, notices, statuses, widgets,
     command: (args: string) => command.handler(args, ctx),
+    completions: (prefix: string) => command.getArgumentCompletions?.(prefix),
     execute: (params: { path: string; openBrowser?: boolean; timeoutSeconds?: number }, signal?: AbortSignal,
       onUpdate?: Parameters<ToolDefinition["execute"]>[3]) =>
       tool.execute("review-call", params, signal, onUpdate, ctx as unknown as ExtensionToolContext),
@@ -110,6 +113,7 @@ test("a command stays responsive and delivers one handoff after explicit review 
   assert.match(h.notices.at(-1)!.text, /http:\/\/localhost:3000\/draft/);
   assert.match(h.statuses.get("roughdraft")!, /draft with spaces\.md/);
   assert.ok(h.widgets.get("roughdraft")?.includes("http://localhost:3000/draft"));
+  assert.ok(h.widgets.get("roughdraft")?.some((line) => line.includes("Finish review")));
 
   const result = completed("/project/draft with spaces.md");
   h.calls[0].resolve(result);
@@ -126,6 +130,88 @@ test("a command stays responsive and delivers one handoff after explicit review 
   await h.command("status");
   assert.match(h.notices.at(-1)!.text, /No active/);
   assert.equal(h.messages.length, 1);
+});
+
+test("reopen explains how to start when this branch has no reviewed file", async () => {
+  const h = harness();
+  await h.command("reopen");
+  assert.equal(h.calls.length, 0);
+  assert.match(h.notices.at(-1)!.text, /No previous.*review.*branch/i);
+  assert.match(h.notices.at(-1)!.text, /\/roughdraft <file\.md>/);
+});
+
+test("reopen starts a fresh review of the last successfully opened absolute path", async () => {
+  const h = harness();
+  await h.command("draft.md");
+  h.calls[0].options.onReady?.({ path: "/project/draft.md", url: "http://localhost:3000/draft" });
+  h.calls[0].resolve(completed());
+  await setImmediate();
+  await h.command("reopen");
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].options.path, "/project/draft.md");
+  assert.notEqual(h.calls[1].options.signal, h.calls[0].options.signal);
+  assert.equal(h.messages.length, 1, "reopen must wait for a new handoff");
+  await h.command("cancel");
+});
+
+test("cancel retains the last path for an explicit reopen without reviving the old handoff", async () => {
+  const h = harness();
+  await h.command("draft.md");
+  h.calls[0].options.onReady?.({ path: "/project/draft.md", url: "http://localhost:3000/draft" });
+  await h.command("cancel");
+  assert.equal(h.calls.length, 1);
+  await h.command("reopen");
+  assert.equal(h.calls[1].options.path, "/project/draft.md");
+  assert.equal(h.calls[1].options.signal.aborted, false);
+  h.calls[0].resolve(completed());
+  await setImmediate();
+  assert.equal(h.messages.length, 0);
+  await h.command("cancel");
+});
+
+for (const event of ["session_before_switch", "session_before_fork", "session_before_tree", "session_shutdown"]) {
+  test(`${event} clears reopen history for the outgoing conversation branch`, async () => {
+    const h = harness();
+    await h.command("draft.md");
+    h.calls[0].options.onReady?.({ path: "/project/draft.md", url: "http://localhost:3000/draft" });
+    h.event(event);
+    await h.command("reopen");
+    assert.equal(h.calls.length, 1);
+    assert.match(h.notices.at(-1)!.text, /No previous/);
+  });
+}
+
+test("reopen cannot carry a reviewed path to another session even without a navigation event", async () => {
+  const h = harness();
+  await h.command("draft.md");
+  h.calls[0].options.onReady?.({ path: "/project/draft.md", url: "http://localhost:3000/draft" });
+  await h.command("cancel");
+  h.setSession("session-b");
+  await h.command("reopen");
+  assert.equal(h.calls.length, 1);
+  assert.match(h.notices.at(-1)!.text, /No previous/);
+});
+
+test("command completions find subcommands and Markdown paths in the current session directory", async (t) => {
+  const cwd = await mkdtemp(path.join(process.cwd(), ".test-completions-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await mkdir(path.join(cwd, "docs with spaces"));
+  await writeFile(path.join(cwd, "draft.md"), "# Draft\n");
+  await writeFile(path.join(cwd, "notes.txt"), "Notes\n");
+  await writeFile(path.join(cwd, "docs with spaces", "Plan.MD"), "# Plan\n");
+  const h = harness(true, cwd);
+  h.event("session_start");
+  assert.deepEqual((await h.completions("re"))?.map((item) => item.value), ["reopen"]);
+  const root = (await h.completions(""))?.map((item) => item.value) ?? [];
+  assert.ok(root.includes("draft.md"));
+  assert.ok(root.includes(`docs with spaces${path.sep}`));
+  assert.equal(root.includes("notes.txt"), false);
+  const matches = await h.completions('"docs with spaces/Pl');
+  assert.equal(matches?.length, 1);
+  await h.command(matches![0].value);
+  assert.equal(h.calls[0].options.path, path.join("docs with spaces", "Plan.MD"));
+  assert.deepEqual(await h.completions("missing-directory/"), null);
+  await h.command("cancel");
 });
 
 test("one active review excludes both entry points, and cancel permits another review", async () => {
