@@ -1,0 +1,41 @@
+{
+  "name": "pi-roughdraft",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local Roughdraft review handoff for Pi",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@types/node": "^22.0.0",
+    "roughdraft": "0.1.10",
+    "tsx": "^4.21.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.9.3",
+    "yaml": "2.9.0"
+  }
+}
