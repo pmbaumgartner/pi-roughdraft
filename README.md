@@ -10,18 +10,20 @@ This small extension is worthwhile for repeated use: it makes the workflow disco
 
 Pi 1.0 includes native MCP support. However, Roughdraft 0.1.10's experimental MCP is **not directly interoperable** with that client: Roughdraft expects `Content-Length` framing while Pi sends newline-delimited JSON. A real connection attempt with Pi's MCP client timed out. Merely adding `roughdraft mcp` to Pi's configuration does not fix this release. This extension bypasses that transport; it is not a general MCP bridge.
 
-Findings and version checks: October 2, 2026. Tested against `@earendil-works/pi-coding-agent@1.0.0`, `roughdraft@0.1.10`, and Node 24.19 on Linux. Requires Node 22.19 or newer. Older `@mariozechner` Pi releases and Windows are not certified by this v1.
+Findings and version checks: October 2, 2026. Tested against `@earendil-works/pi-coding-agent@1.0.0`, `roughdraft@0.1.11-pmbaumgartner.1` (our packaging-only fork of 0.1.10), and Node 24.19 on Linux. Requires Node 22.19 or newer. Older `@mariozechner` Pi releases and Windows are not certified by this v1.
 
 ## Install
 
-Install Roughdraft if needed:
+Install the tested Roughdraft fork:
 
 ```bash
-npm install -g roughdraft@0.1.10 yaml@2.9.0
+npm install -g https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.1/roughdraft-0.1.11-pmbaumgartner.1.tgz
 roughdraft --version
 ```
 
-The explicit `yaml` package works around a reproduced packaging defect in Roughdraft 0.1.10: a clean npm installation omitted that dependency and even `roughdraft --version` failed. If your existing Roughdraft already runs, no reinstall is needed.
+This [temporary fork](https://github.com/pmbaumgartner/roughdraft) declares `yaml` as a runtime dependency, fixing the clean-install crash in upstream 0.1.10. The release includes the built app and server; no separate `yaml` installation or source build is needed. The application and review protocol are unchanged. `roughdraft --version` should print `0.1.11-pmbaumgartner.1`. If Roughdraft was already running, finish any active review and run `roughdraft stop` once so the next review starts the installed version.
+
+The fork is a temporary packaging fix. To return to upstream after it publishes a verified fix, run `npm install -g roughdraft@<fixed-version>`; the extension will continue using the `roughdraft` executable on your `PATH`.
 
 Then register the extension with your existing Pi 1.0 installation:
 
@@ -85,7 +87,7 @@ npm run check
 npm test
 ```
 
-Tests use an isolated state directory and a real Roughdraft local server, stop that server afterward, and do not launch a browser. They need permission to spawn local processes and bind loopback ports. `yaml` is an explicit development dependency for the same upstream packaging workaround.
+Tests use an isolated state directory and a real Roughdraft local server, stop that server afterward, and do not launch a browser. They need permission to spawn local processes and bind loopback ports. The development dependency uses the same pinned fork release as the installation instructions; `yaml` is supplied by Roughdraft itself.
 
 The integration tests exercise fresh handoffs, exclusion of old events, persisted overall comments, unusual filenames, byte preservation when no edits occur, cancellation without stopping the shared server, review deadlines, and rejection of remote mode. Protocol-boundary tests cover malformed feedback, wrong documents, restarted servers, and watcher failure during a blocked browser launch. Pi registration tests exercise command/tool behavior, delivery after Pi becomes idle, and lifecycle races. No provider credentials or model calls are required.
 
@@ -93,7 +95,7 @@ Validation also included a real Pi package install/load and a direct native MCP 
 
 ## Sources and design dependencies
 
-- [Roughdraft](https://www.roughdraft.md/) and its [README / CLI reference](https://github.com/Lex-Inc/roughdraft).
+- [Tested Roughdraft fork](https://github.com/pmbaumgartner/roughdraft), [upstream Roughdraft](https://www.roughdraft.md/), and its [README / CLI reference](https://github.com/Lex-Inc/roughdraft).
 - [Roughdraft source inspected at commit 686919e](https://github.com/Lex-Inc/roughdraft/tree/686919ec0a3a0648fd2f1fdb2665816fb4b10608): `packages/server/src/cli.ts`, `index.ts`, `review-events.ts`, and `mcp.ts`.
 - [Roughdraft Flavored Markdown specification](https://roughdraft.md/spec/roughdraft-flavored-markdown.md).
 - [Pi native MCP documentation](https://pi.dev/docs/latest/mcp), [extensions](https://pi.dev/docs/latest/extensions), and [packages](https://pi.dev/docs/latest/packages).

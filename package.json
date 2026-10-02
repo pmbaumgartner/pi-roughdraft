@@ -1,6 +1,6 @@
 {
   "name": "pi-roughdraft",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A local Roughdraft review handoff for Pi",
   "type": "module",
@@ -32,10 +32,9 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.0.0",
     "@types/node": "^22.0.0",
-    "roughdraft": "0.1.10",
+    "roughdraft": "https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.1/roughdraft-0.1.11-pmbaumgartner.1.tgz",
     "tsx": "^4.21.0",
     "typebox": "^1.0.0",
-    "typescript": "^5.9.3",
-    "yaml": "2.9.0"
+    "typescript": "^5.9.3"
   }
 }
