@@ -8,20 +8,20 @@ Roughdraft works with Pi's ordinary shell and file tools without an extension. I
 
 This small extension is worthwhile for repeated use: it makes the workflow discoverable, shows the local review URL and status, supports cancellation, and protects against delivering feedback into a different session or conversation branch. It returns a compact handoff and lets Pi read the current file instead of copying the whole document into another tool response. It does not implement a Markdown parser or replace Roughdraft's editor.
 
-Pi 1.0 includes native MCP support. However, Roughdraft 0.1.10's experimental MCP is **not directly interoperable** with that client: Roughdraft expects `Content-Length` framing while Pi sends newline-delimited JSON. A real connection attempt with Pi's MCP client timed out. Merely adding `roughdraft mcp` to Pi's configuration does not fix this release. This extension bypasses that transport; it is not a general MCP bridge.
+Pi 1.0's native MCP client works with the tested fork's newline-delimited stdio transport. The extension adds the browser review handoff, progress, conversation ownership, cancellation, and receipt confirmation; it remains useful alongside native MCP.
 
-Findings and version checks: October 2, 2026. Tested against `@earendil-works/pi-coding-agent@1.0.0`, `roughdraft@0.1.11-pmbaumgartner.2` (our workflow fork of 0.1.10), and Node 24.19 on Linux. Requires Node 22.19 or newer. Older `@mariozechner` Pi releases and Windows are not certified by this v1.
+Tested with `@earendil-works/pi-coding-agent@1.0.0` and the Roughdraft fork linked below. Use Node 24 for development; the extension requires Node 22.19 or newer.
 
 ## Install
 
 Install the tested Roughdraft fork:
 
 ```bash
-npm install -g https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.2/roughdraft-0.1.11-pmbaumgartner.2.tgz
+npm install -g https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.3/roughdraft-0.1.11-pmbaumgartner.3.tgz
 roughdraft --version
 ```
 
-This [fork](https://github.com/pmbaumgartner/roughdraft) declares `yaml` as a runtime dependency, fixing the clean-install crash in upstream 0.1.10. The release includes the built app and server; no separate `yaml` installation or source build is needed. It also includes review workflow fixes for reply visibility, code-block preservation, and watch cancellation. `roughdraft --version` should print `0.1.11-pmbaumgartner.2`. If Roughdraft was already running, finish any active review and run `roughdraft stop` once so the next review starts the installed version.
+This [fork](https://github.com/pmbaumgartner/roughdraft) declares `yaml` as a runtime dependency, fixing the clean-install crash in upstream 0.1.10. The release includes the built app and server; no separate `yaml` installation or source build is needed. It also includes review workflow fixes for reply visibility, code-block preservation, and watch cancellation. `roughdraft --version` should print `0.1.11-pmbaumgartner.3`. If Roughdraft was already running, finish any active review and run `roughdraft stop` once so the next review starts the installed version.
 
 To return to upstream after it includes and verifies the fixes you need, run `npm install -g roughdraft@<fixed-version>`; the extension will continue using the `roughdraft` executable on your `PATH`.
 
@@ -31,7 +31,7 @@ Then register the extension with your existing Pi 1.0 installation:
 pi install git:github.com/pmbaumgartner/pi-roughdraft
 ```
 
-Start Pi, or run `/reload` in a running session. No build or manual `npm install` in this extension folder is required for ordinary use; Pi supplies its extension API and TypeBox. Git installation does not install development dependencies, so Roughdraft remains a separate prerequisite.
+Start Pi, or run `/reload` in a running session. No build or manual `npm install` in this extension folder is required for ordinary use; Pi supplies its extension API and TypeBox. Git installation does not install development dependencies, so Roughdraft remains a separate prerequisite. The package also installs the portable `roughdraft` Agent Skill, including environment setup instructions. It does not edit user AGENTS.md or other global instruction files.
 
 To remove it, use `pi remove git:github.com/pmbaumgartner/pi-roughdraft` and reload. Run `pi update --extensions` to update installed extensions.
 
@@ -78,9 +78,9 @@ Only one review is active per extension instance, including feedback waiting for
 
 Pi, Roughdraft, and the file must run on the same computer for the default browser workflow. SSH/container use needs browser access or port forwarding arranged separately. No document contents are sent to a hosted Roughdraft service by this adapter. Once Pi reads the file, its configured model/provider handles that content under Pi's normal settings.
 
-The adapter bootstraps through the CLI, establishes a review cursor, then waits on Roughdraft's local HTTP review-event API with 15-second long polls. The cursor catches handoffs between requests and excludes previous reviews. Polls run locally without LLM calls. A server restart fails the review rather than silently reconnecting to a fresh event history.
+The adapter bootstraps quietly through the CLI, creates a scoped review identity before exposing its browser URL, establishes a review cursor, then waits on Roughdraft's local HTTP review-event API with 15-second long polls. The cursor catches handoffs between requests and excludes previous reviews. Polls run locally without LLM calls. A server restart fails the review rather than silently reconnecting to a fresh event history.
 
-The HTTP endpoints are an upstream implementation contract, not a promised stable external API. Changes to Roughdraft may require updating `src/client.ts`; use the tested version for predictable behavior. The tested fork removes a watcher when its client disconnects. The extension will not resume a canceled review. Roughdraft retains only 100 events, so it cannot recover arbitrarily long gaps or server restarts.
+The HTTP endpoints are an upstream implementation contract, not a promised stable external API. Changes to Roughdraft may require updating `src/client.ts`; use the tested version for predictable behavior. The tested fork removes a watcher when its client disconnects. The extension will not resume a canceled review. Scoped sessions retain their own completion until receipt/cancellation and terminal-session eviction; the legacy queue retains only 100 events. Server restarts require a fresh review. Older servers still use the legacy document watcher and cannot confirm receipt.
 
 ## Develop and verify
 
@@ -94,7 +94,37 @@ Tests use an isolated state directory and a real Roughdraft local server, stop t
 
 The integration tests exercise fresh handoffs, exclusion of old events, persisted overall comments, unusual filenames, byte preservation when no edits occur, cancellation without stopping the shared server, review deadlines, and rejection of remote mode. Protocol-boundary tests cover malformed feedback, wrong documents, restarted servers, and watcher failure during a blocked browser launch. Pi registration tests exercise command/tool behavior, explicit reopening, file completion, delivery after Pi becomes idle, and lifecycle races. Input tests check actionable missing-file and fork-setup errors. No provider credentials or model calls are required.
 
-Validation also included a real Pi package install/load and a direct native MCP connection attempt. Desktop browser launching and a paid model completing the reply loop were not exercised in this environment. On your machine, open a short document, add a comment, click Finish review, and verify Pi reads the updated file. This is the remaining desktop acceptance check.
+Run the actual Pi host and native MCP acceptance check without provider credentials:
+
+```bash
+npm run skill:check
+npm run test:acceptance
+npx playwright install --with-deps chromium
+npm run test:acceptance:browser
+```
+
+The default acceptance provider is explicitly deterministic: the real Pi agent calls the extension, waits for completion, and uses Pi's read tool to reread saved feedback. Browser acceptance opens the actual built Roughdraft app, submits an overall comment, and waits for **Received by Pi**. CI runs both. Managed runtimes that block Chromium launch must use the normal-runner CI gate.
+
+For a bounded live-model check with an already configured provider, select the provider and model explicitly. This makes model API calls:
+
+```bash
+pi auth check --provider <provider> --json --no-refresh
+npm run test:acceptance:browser -- --live --provider <provider> --model <model-id>
+```
+
+Receipt confirms acceptance by the owning Pi job, not that a model finished processing feedback. Queued feedback remains cancellable while Pi is busy; navigating to another conversation cancels the handoff. Saved Markdown remains available.
+
+## Refresh the tested Roughdraft release
+
+```bash
+npm run roughdraft:update -- <fork-version>
+npm run check
+npm test
+npm run skill:check
+npm run test:acceptance:browser
+```
+
+Omit the version to use GitHub Latest. The update verifies SHA256SUMS before installing exact archive bytes, regenerates lockfile integrity, updates install links, and copies the canonical skill from that package. The **Update Roughdraft dependency** workflow performs these steps and opens a checked update PR with one dispatch. This does not require a token shared between repositories; dispatch it after a fork release. GitHub's workflow setting must allow its GITHUB_TOKEN to create pull requests.
 
 ## Sources and design dependencies
 
@@ -104,4 +134,4 @@ Validation also included a real Pi package install/load and a direct native MCP 
 - [Pi native MCP documentation](https://pi.dev/docs/latest/mcp), [extensions](https://pi.dev/docs/latest/extensions), and [packages](https://pi.dev/docs/latest/packages).
 - [Pi stdio transport implementation](https://github.com/earendil-works/pi/blob/main/packages/mcp/src/transports/stdio.ts); published `@earendil-works/pi-mcp@1.0.0` was used for the interoperability probe.
 
-If Roughdraft fixes its MCP framing and adds a reliable native open/review handoff, reassess whether this extension still earns its upkeep. Until then, the CLI alone is the lowest-maintenance baseline; this extension adds the Pi-specific interaction and lifecycle handling.
+Use native MCP for review-index, reply, and resolution tools. Use this extension for the scoped Pi/browser handoff and lifecycle handling.

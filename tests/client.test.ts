@@ -5,7 +5,19 @@ import net from "node:net";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { promisify } from "node:util";
-import { reviewDocument } from "../src/client.ts";
+import { reviewDocument as review, type ReviewOptions } from "../src/client.ts";
+
+const reviewIds = new Map<string, string>();
+function reviewDocument(options: ReviewOptions) {
+  return review({
+    ...options,
+    onReady(info) {
+      const reviewId = new URL(info.url).searchParams.get("reviewId");
+      if (reviewId) reviewIds.set(info.path, reviewId);
+      options.onReady?.(info);
+    },
+  });
+}
 
 const execFileAsync = promisify(execFile);
 let directory: string;
@@ -18,7 +30,9 @@ async function availablePort(): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return address.port;
 }
 
@@ -53,10 +67,18 @@ async function emitReview(file: string, overallComment?: string) {
   const response = await fetch(new URL("/api/review-events", serverUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectPath: path.dirname(file), path: path.basename(file), overallComment }),
+    body: JSON.stringify({
+      projectPath: path.dirname(file),
+      path: path.basename(file),
+      overallComment,
+      reviewId: reviewIds.get(file),
+    }),
   });
   assert.equal(response.status, 201);
-  return response.json() as Promise<{ delivered: boolean; event: { sequence: number } }>;
+  return response.json() as Promise<{
+    delivered: boolean;
+    event: { sequence: number };
+  }>;
 }
 
 async function waitUntilWatching(file: string): Promise<void> {
@@ -65,21 +87,31 @@ async function waitUntilWatching(file: string): Promise<void> {
   url.searchParams.set("path", path.basename(file));
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
+    const reviewId = reviewIds.get(file);
+    if (reviewId) url.searchParams.set("reviewId", reviewId);
     const response = await fetch(url);
-    if ((await response.json() as { watching: boolean }).watching) return;
+    if (((await response.json()) as { watching: boolean }).watching) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error("The real Roughdraft server never registered the review watcher.");
+  throw new Error(
+    "The real Roughdraft server never registered the review watcher.",
+  );
 }
 
 test("fresh review ignores old handoffs and delivers persisted overall feedback", async () => {
   const file = await createDocument("with space; and $characters.md");
   const previous = await emitReview(file);
   let ready!: () => void;
-  const readyPromise = new Promise<void>((resolve) => { ready = resolve; });
+  const readyPromise = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
   const controller = new AbortController();
   const pending = reviewDocument({
-    path: file, cwd: directory, env, signal: controller.signal, openBrowser: false,
+    path: file,
+    cwd: directory,
+    env,
+    signal: controller.signal,
+    openBrowser: false,
     onReady(info) {
       assert.equal(info.path, file);
       assert.equal(new URL(info.url).hostname, "localhost");
@@ -92,12 +124,26 @@ test("fresh review ignores old handoffs and delivers persisted overall feedback"
     const completed = await emitReview(file, "Please clarify this paragraph.");
     assert.equal(completed.delivered, true);
     const result = await pending;
+    assert.ok(result.receipt, "Scoped server supplies a receipt");
+    assert.equal(JSON.stringify(result).includes("receiptToken"), false);
+    await result.receipt.acknowledge();
+    const statusUrl = new URL("/api/review-events/status", serverUrl);
+    statusUrl.searchParams.set("projectPath", path.dirname(file));
+    statusUrl.searchParams.set("path", path.basename(file));
+    statusUrl.searchParams.set("reviewId", reviewIds.get(file)!);
+    assert.equal((await (await fetch(statusUrl)).json()).state, "received");
     assert.equal(result.path, file);
     assert.equal(result.events.length, 1);
     assert.ok(result.events[0].sequence > previous.event.sequence);
-    assert.equal(result.events[0].overallComment, "Please clarify this paragraph.");
+    assert.equal(
+      result.events[0].overallComment,
+      "Please clarify this paragraph.",
+    );
     assert.equal(result.events[0].summary.comments, 1);
-    assert.match(await readFile(file, "utf8"), /Please clarify this paragraph\./);
+    assert.match(
+      await readFile(file, "utf8"),
+      /Please clarify this paragraph\./,
+    );
   } finally {
     controller.abort();
     await pending.catch(() => {});
@@ -109,7 +155,13 @@ test("a handoff with no edits preserves the Markdown bytes", async () => {
   const original = await readFile(file);
   const controller = new AbortController();
   // Exercise the browser-launch CLI phase while ROUGHDRAFT_NO_OPEN keeps CI headless.
-  const pending = reviewDocument({ path: file, cwd: directory, env, signal: controller.signal, openBrowser: true });
+  const pending = reviewDocument({
+    path: file,
+    cwd: directory,
+    env,
+    signal: controller.signal,
+    openBrowser: true,
+  });
   try {
     await waitUntilWatching(file);
     await emitReview(file);
@@ -124,7 +176,13 @@ test("a handoff with no edits preserves the Markdown bytes", async () => {
 test("cancel aborts a pending review without stopping the shared Roughdraft server", async () => {
   const file = await createDocument("cancel.md");
   const controller = new AbortController();
-  const pending = reviewDocument({ path: file, cwd: directory, env, signal: controller.signal, openBrowser: false });
+  const pending = reviewDocument({
+    path: file,
+    cwd: directory,
+    env,
+    signal: controller.signal,
+    openBrowser: false,
+  });
   void pending.catch(() => {});
   await waitUntilWatching(file);
   controller.abort();
@@ -134,15 +192,27 @@ test("cancel aborts a pending review without stopping the shared Roughdraft serv
 
 test("optional overall timeout is distinguishable from a completed review", async () => {
   const file = await createDocument("timeout.md");
-  await assert.rejects(reviewDocument({
-    path: file, cwd: directory, env, signal: new AbortController().signal,
-    openBrowser: false, timeoutSeconds: 1,
-  }), { name: "TimeoutError" });
+  await assert.rejects(
+    reviewDocument({
+      path: file,
+      cwd: directory,
+      env,
+      signal: new AbortController().signal,
+      openBrowser: false,
+      timeoutSeconds: 1,
+    }),
+    { name: "TimeoutError" },
+  );
 });
 
 test("remote mode fails before opening or handing file contents to a remote host", async () => {
-  await assert.rejects(reviewDocument({
-    path: "unused.md", cwd: directory, signal: new AbortController().signal,
-    env: { ...env, ROUGHDRAFT_HOST: "https://remote.example" },
-  }), /Remote Roughdraft sessions are not supported/);
+  await assert.rejects(
+    reviewDocument({
+      path: "unused.md",
+      cwd: directory,
+      signal: new AbortController().signal,
+      env: { ...env, ROUGHDRAFT_HOST: "https://remote.example" },
+    }),
+    /Remote Roughdraft sessions are not supported/,
+  );
 });

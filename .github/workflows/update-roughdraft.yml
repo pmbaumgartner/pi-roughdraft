@@ -1,0 +1,44 @@
+name: Update Roughdraft dependency
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Fork version, or leave empty for Latest
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    if: github.repository == 'pmbaumgartner/pi-roughdraft'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Refresh verified dependency, lockfile, docs, and skill
+        env:
+          FORK_VERSION: ${{ inputs.version }}
+        run: node scripts/update-roughdraft.mjs ${FORK_VERSION:+"$FORK_VERSION"}
+      - run: npm run check && npm test && npm run skill:check && npm run test:acceptance
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:acceptance:browser
+      - name: Open update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          branch="update-roughdraft-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git add package.json package-lock.json README.md skills
+          git commit -m 'Update verified Roughdraft release and bundled skill'
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title 'Update verified Roughdraft release' --body 'Updates the tested release pin, lockfile integrity, setup links, and bundled agent skill. Checks, native Pi MCP, actual Pi host acceptance, and Chromium review acceptance passed in this workflow.'

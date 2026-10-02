@@ -1,6 +1,6 @@
 {
   "name": "pi-roughdraft",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "A local Roughdraft review handoff for Pi",
   "type": "module",
@@ -14,10 +14,14 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "files": [
     "src",
+    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -27,12 +31,20 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:acceptance": "node --import tsx scripts/acceptance.ts",
+    "test:acceptance:browser": "node --import tsx scripts/acceptance.ts --browser",
+    "skill:sync": "node scripts/sync-skill.mjs",
+    "skill:check": "node scripts/sync-skill.mjs --check",
+    "roughdraft:update": "node scripts/update-roughdraft.mjs"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-mcp": "1.0.0",
+    "@playwright/test": "1.59.1",
     "@types/node": "^22.0.0",
-    "roughdraft": "https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.2/roughdraft-0.1.11-pmbaumgartner.2.tgz",
+    "roughdraft": "https://github.com/pmbaumgartner/roughdraft/releases/download/v0.1.11-pmbaumgartner.3/roughdraft-0.1.11-pmbaumgartner.3.tgz",
     "tsx": "^4.21.0",
     "typebox": "^1.0.0",
     "typescript": "^5.9.3"
